@@ -1,0 +1,76 @@
+name: Deploy muwahid.org
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: muwahid-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+
+    env:
+      APP_DIR: /home/webmaster/workspaces/next-workspace-pilot/apps/muwahid-web-next
+      PM2_NAME: muwahid-web
+      PORT: "3040"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build
+        run: npm run build
+
+      - name: Prepare SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.BIZNET_SSH_KEY }}" > ~/.ssh/muwahid_deploy_key
+          chmod 600 ~/.ssh/muwahid_deploy_key
+          ssh-keyscan -H "${{ secrets.BIZNET_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Sync source to server
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.next/' \
+            --exclude='node_modules/' \
+            --exclude='.env*' \
+            --exclude='*.log' \
+            --exclude='backup-*/' \
+            --exclude='*.bak' \
+            --exclude='*.bak-*' \
+            -e "ssh -i ~/.ssh/muwahid_deploy_key" \
+            ./ "${{ secrets.BIZNET_USER }}@${{ secrets.BIZNET_HOST }}:${APP_DIR}/"
+
+      - name: Install, build, and restart on server
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/muwahid_deploy_key "${{ secrets.BIZNET_USER }}@${{ secrets.BIZNET_HOST }}" \
+            "set -euo pipefail
+             cd '${APP_DIR}'
+             npm ci --no-audit --no-fund
+             npm run build
+             PORT='${PORT}' pm2 restart '${PM2_NAME}' --update-env
+             pm2 save
+             curl -fsS --max-time 20 http://127.0.0.1:${PORT}/ >/dev/null"
