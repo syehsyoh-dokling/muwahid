@@ -74,4 +74,10 @@ jobs:
              MUWAHID_TURBOPACK_ROOT='${WORKSPACE_ROOT}' npm run build
              PORT='${PORT}' pm2 restart '${PM2_NAME}' --update-env
              pm2 save
+             for attempt in 1 2 3 4 5 6; do
+               if curl -fsS --max-time 20 http://127.0.0.1:${PORT}/ >/dev/null; then
+                 exit 0
+               fi
+               sleep 5
+             done
              curl -fsS --max-time 20 http://127.0.0.1:${PORT}/ >/dev/null"
